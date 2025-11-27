@@ -1,235 +1,70 @@
-// Printing Shop Order Tracker with Loyalty, Segments & Analytics
-// Added features:
-// - Loyalty points (earn on each order)
-// - Customer segments (New, Returning, Frequent, VIP)
-// - Analytics dashboard (totals, repeat rate, top customers)
-// - All previous features preserved
+// src/components/OrdersPanel.tsx
+import React, { useEffect, useState } from 'react';
 
-import React, { useEffect, useState } from "react";
+type Product = { id:number, sku:string, name:string, price:number };
+type OrderItem = { productId:number, quantity:number };
 
-const uid = () => Math.random().toString(36).slice(2, 9);
-const STORAGE_KEY = "printing_orders_v3";
+export default function OrdersPanel() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [items, setItems] = useState<OrderItem[]>([{productId:0, quantity:1}]);
+  const [orders, setOrders] = useState<any[]>([]);
 
-export default function OrderTrackerApp() {
-  const [orders, setOrders] = useState([]);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
-
-  // form
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [details, setDetails] = useState("");
-
-  // customer popup
-  const [customerView, setCustomerView] = useState(null);
-
-  // analytics view
-  const [showStats, setShowStats] = useState(false);
-
-  useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) setOrders(JSON.parse(raw));
+  useEffect(()=> {
+    fetch('/api/products').then(r=>r.json()).then(setProducts);
+    fetch('/api/orders').then(r=>r.json()).then(setOrders);
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
-  }, [orders]);
-
-  // ---------------- CUSTOMER FUNCTIONS ----------------
-  function lookupCustomer(number) {
-    const list = orders.filter((o) => o.phone === number);
-    if (list.length === 0) return null;
-
-    const totalOrders = list.length;
-    const completedOrders = list.filter((o) => o.completed).length;
-    const loyalty = completedOrders * 5; // 5 points per completed order
-
-    // Segment rules
-    let segment = "New";
-    if (totalOrders >= 2) segment = "Returning";
-    if (totalOrders >= 5) segment = "Frequent";
-    if (totalOrders >= 12) segment = "VIP";
-
-    return {
-      name: list[list.length - 1].customerName,
-      phone: number,
-      history: list,
-      loyalty,
-      segment,
-      totalOrders,
-    };
+  function addRow(){
+    setItems(prev => [...prev, {productId: products[0]?.id || 0, quantity:1}]);
   }
-
-  function onPhoneChange(v) {
-    setPhone(v);
-    if (v.length >= 4) {
-      const c = lookupCustomer(v);
-      if (c) setName(c.name || "");
+  function updateRow(index:number, field:'productId'|'quantity', value:any){
+    const copy = [...items];
+    // @ts-ignore
+    copy[index][field] = value;
+    setItems(copy);
+  }
+  async function createOrder(){
+    const body = { customerId: 1, items: items.filter(i=>i.productId), shipping: 0 };
+    const res = await fetch('/api/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if(res.ok) {
+      alert('Order created');
+      const o = await res.json();
+      setOrders(prev => [o, ...prev]);
+    } else {
+      const err = await res.json();
+      alert('Error: ' + JSON.stringify(err));
     }
   }
 
-  // ---------------- ADD ORDER ----------------
-  function addOrder(e) {
-    e.preventDefault();
-    if (!phone.trim()) return alert("Phone number required");
-
-    const order = {
-      id: uid(),
-      customerName: name || "-",
-      phone: phone.trim(),
-      details: details.trim(),
-      dateReceived: new Date().toISOString(),
-      completed: false,
-      pickedUp: false,
-      completedAt: null,
-      pickedAt: null,
-    };
-
-    setOrders((s) => [order, ...s]);
-    setName("");
-    setPhone("");
-    setDetails("");
-  }
-
-  // ---------------- STATUS HANDLING ----------------
-  function toggleCompleted(id) {
-    setOrders((s) =>
-      s.map((o) =>
-        o.id === id
-          ? {
-              ...o,
-              completed: !o.completed,
-              completedAt: !o.completed ? new Date().toISOString() : null,
-              pickedUp: !o.completed ? o.pickedUp : false,
-              pickedAt: !o.completed ? o.pickedAt : null,
-            }
-          : o
-      )
-    );
-  }
-
-  function togglePickedUp(id) {
-    setOrders((s) =>
-      s.map((o) =>
-        o.id === id
-          ? {
-              ...o,
-              pickedUp: !o.pickedUp && o.completed ? true : false,
-              pickedAt: !o.pickedUp && o.completed ? new Date().toISOString() : null,
-            }
-          : o
-      )
-    );
-  }
-
-  function removeOrder(id) {
-    if (!confirm("Delete order?")) return;
-    setOrders((s) => s.filter((o) => o.id !== id));
-  }
-
-  // ---------------- FILTERS ----------------
-  function filtered() {
-    let list = orders;
-    const q = query.toLowerCase();
-    if (q)
-      list = list.filter(
-        (o) =>
-          o.phone.includes(q) ||
-          (o.customerName || "").toLowerCase().includes(q) ||
-          (o.details || "").toLowerCase().includes(q)
-      );
-
-    if (filter === "new") list = list.filter((o) => !o.completed);
-    if (filter === "completed") list = list.filter((o) => o.completed);
-    if (filter === "picked") list = list.filter((o) => o.pickedUp);
-    if (filter === "onshelf") list = list.filter((o) => o.completed && !o.pickedUp);
-
-    return list;
-  }
-
-  // ---------------- SUMMARY ----------------
-  const total = orders.length;
-  const completedCount = orders.filter((o) => o.completed).length;
-  const pickedCount = orders.filter((o) => o.pickedUp).length;
-  const onShelf = orders.filter((o) => o.completed && !o.pickedUp).length;
-
-  // ---------------- ANALYTICS ----------------
-  const uniqueCustomers = new Set(orders.map((o) => o.phone)).size;
-  const repeatCustomers = [...new Set(orders.map((o) => o.phone))].filter(
-    (p) => orders.filter((o) => o.phone === p).length >= 2
-  ).length;
-
-  const topCustomers = Object.values(
-    orders.reduce((acc, o) => {
-      acc[o.phone] = acc[o.phone] || { phone: o.phone, count: 0, name: o.customerName };
-      acc[o.phone].count++;
-      return acc;
-    }, {})
-  ).sort((a, b) => b.count - a.count);
-
-  function openCustomer(number) {
-    const c = lookupCustomer(number);
-    if (!c) return;
-    setCustomerView(c);
-  }
-
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Printing Shop — Order Tracker + Loyalty + Analytics</h1>
+    <div className="p-4">
+      <h2 className="text-xl font-bold mb-3">Create Order</h2>
 
-      <button
-        className="mb-4 px-4 py-2 bg-purple-600 text-white rounded"
-        onClick={() => setShowStats(!showStats)}
-      >
-        {showStats ? "Hide Analytics" : "Show Analytics"}
-      </button>
-
-      {/* Analytics Dashboard */}
-      {showStats && (
-        <div className="bg-white p-4 rounded shadow mb-6">
-          <h2 className="font-semibold text-lg mb-3">Analytics Dashboard</h2>
-          <p>Total Orders: <b>{total}</b></p>
-          <p>Total Customers: <b>{uniqueCustomers}</b></p>
-          <p>Repeat Customers: <b>{repeatCustomers}</b></p>
-          <p>Repeat Rate: <b>{uniqueCustomers ? Math.round((repeatCustomers / uniqueCustomers) * 100) : 0}%</b></p>
-
-          <h3 className="font-semibold mt-3">Top Customers</h3>
-          <ul className="list-disc ml-5 text-sm">
-            {topCustomers.slice(0, 5).map((c) => (
-              <li key={c.phone}>{c.name} — {c.count} orders</li>
-            ))}
-          </ul>
+      <div className="mb-4">
+        {items.map((row, idx)=>(
+          <div key={idx} className="flex gap-2 mb-2">
+            <select value={row.productId} onChange={e=>updateRow(idx,'productId',Number(e.target.value))} className="border p-1 rounded">
+              <option value={0}>-- choose --</option>
+              {products.map(p => <option value={p.id} key={p.id}>{p.sku} — {p.name} — ${p.price}</option>)}
+            </select>
+            <input type="number" value={row.quantity} min={1} onChange={e=>updateRow(idx,'quantity',Number(e.target.value))} className="w-20 border p-1 rounded"/>
+          </div>
+        ))}
+        <div className="flex gap-2">
+          <button onClick={addRow} className="px-3 py-1 rounded bg-gray-200">Add item</button>
+          <button onClick={createOrder} className="px-3 py-1 rounded bg-blue-600 text-white">Create order</button>
         </div>
-      )}
+      </div>
 
-      {/* Add Order */}
-      <form onSubmit={addOrder} className="bg-white p-4 rounded-lg shadow mb-6">
-        <div className="flex gap-2 mb-2">
-          <input
-            value={phone}
-            onChange={(e) => onPhoneChange(e.target.value)}
-            placeholder="Phone (required)"
-            className="w-40 p-2 border rounded"
-          />
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Customer name"
-            className="flex-1 p-2 border rounded"
-          />
-        </div>
-        <textarea
-          value={details}
-          onChange={(e) => setDetails(e.target.value)}
-          placeholder="Order details"
-          className="w-full p-2 border rounded mb-2"
-        />
-        <button className="px-4 py-2 bg-blue-600 text-white rounded">Add Order</button>
-      </form>
-
-      {/* Filters */}
-      <div className="bg-white p-4 rounded shadow mb-6">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="p-2 border rounded w
+      <h3 className="text-lg font-semibold mb-2">Recent Orders</h3>
+      <ul>
+        {orders.map(o=>(
+          <li key={o.id} className="p-2 border rounded mb-2">
+            <div>Order #{o.id} — {o.status} — ${o.total}</div>
+            <div className="text-sm text-gray-600">Created: {new Date(o.created_at).toLocaleString()}</div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
